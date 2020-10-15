@@ -1,0 +1,78 @@
+stages:
+  - validate
+  - staging
+  - deploy
+
+validate-k8s-yaml:
+  stage: validate
+  # normally self builded image in your own registry with kubeval installed
+  image: garethr/kubeval:latest
+  script:
+    # validating against the Kubernetes schema 
+    - kubeval k8s/*.yaml --strict --kubernetes-version ${G_KUBE_MAJOR_VERSION}
+  tags:
+    - test
+  rules:
+    - if: '$CI_COMMIT_BRANCH != "master" && $CI_MERGE_REQUEST_ID == null'
+
+deploy-to-k8s:
+  stage: staging
+  # normally self builded image in your own registry with kubectl installed
+  image: bitnami/kubectl:latest
+  environment:
+    name: dev
+    kubernetes:
+      namespace: ${P_KUBE_NAMESPACE}
+  script:
+    # Define K8s default environment
+    - kubectl config set-cluster ${G_KUBE_DEV_CLUSTER} --server="${KUBE_URL}"
+    - kubectl config set clusters.${G_KUBE_DEV_CLUSTER}.certificate-authority-data ${G_KUBE_DEV_CLUSTER_CA}
+    - kubectl config set-credentials ${G_GITLAB_ADMIN} --token="${G_GITLAB_ADMIN_DEV_TOKEN}"
+    - kubectl config set-context default --cluster="${G_KUBE_DEV_CLUSTER}" --user="${G_GITLAB_ADMIN}" --namespace="${P_KUBE_NAMESPACE}"
+    - kubectl config use-context default
+    # deploying manifest
+    - kubectl apply -f k8s/components.yaml
+    # Patch deployment template annotations for GitLab deploy boards
+    - |
+      kubectl patch deployments.apps ${CI_PROJECT_NAME} -p '{"spec":{"template":{"metadata":{"annotations":{"app.gitlab.com/app": "CI_PROJECT_PATH_SLUG"}}}}}'
+      kubectl patch deployments.apps ${CI_PROJECT_NAME} -p '{"spec":{"template":{"metadata":{"annotations":{"app.gitlab.com/env": "CI_ENVIRONMENT_SLUG"}}}}}'
+    # Patch pod template annotations for GitLab deploy boards
+    - |
+      kubectl patch deployments.apps ${CI_PROJECT_NAME} -p '{"metadata":{"annotations":{"app.gitlab.com/app": "CI_PROJECT_PATH_SLUG"}}}'
+      kubectl patch deployments.apps ${CI_PROJECT_NAME} -p '{"metadata":{"annotations":{"app.gitlab.com/env": "CI_ENVIRONMENT_SLUG"}}}'
+  tags:
+    - staging
+    - kubernetes-dev
+  rules:
+    - if: '$CI_COMMIT_BRANCH != "master" && $CI_MERGE_REQUEST_ID == null'
+
+deploy-to-prod-k8s:
+  stage: deploy
+  # normally self builded image in your own registry with kubectl installed
+  image: bitnami/kubectl:latest
+  environment:
+    name: production
+    kubernetes:
+      namespace: ${P_KUBE_NAMESPACE}
+  script:
+    # Define K8s default rnvironment
+    - kubectl config set-cluster ${G_KUBE_PROD_CLUSTER} --server="${KUBE_URL}"
+    - kubectl config set clusters.${G_KUBE_PROD_CLUSTER}.certificate-authority-data ${G_KUBE_PROD_CLUSTER_CA}
+    - kubectl config set-credentials ${G_GITLAB_ADMIN} --token="${G_GITLAB_ADMIN_PROD_TOKEN}"
+    - kubectl config set-context default --cluster="${G_KUBE_CLUSTER}" --user="${G_GITLAB_ADMIN}" --namespace="${P_KUBE_NAMESPACE}"
+    - kubectl config use-context default
+    # deploying manifest
+    - kubectl apply -f k8s/components.yaml
+    # Patch deployment template annotations for GitLab deploy board
+    - |
+      kubectl patch deployments.apps ${CI_PROJECT_NAME} -p '{"spec":{"template":{"metadata":{"annotations":{"app.gitlab.com/app": "CI_PROJECT_PATH_SLUG"}}}}}'
+      kubectl patch deployments.apps ${CI_PROJECT_NAME} -p '{"spec":{"template":{"metadata":{"annotations":{"app.gitlab.com/env": "CI_ENVIRONMENT_SLUG"}}}}}'
+    # Patch pod template annotations for GitLab deploy board
+    - |
+      kubectl patch deployments.apps ${CI_PROJECT_NAME} -p '{"metadata":{"annotations":{"app.gitlab.com/app": "CI_PROJECT_PATH_SLUG"}}}'
+      kubectl patch deployments.apps ${CI_PROJECT_NAME} -p '{"metadata":{"annotations":{"app.gitlab.com/env": "CI_ENVIRONMENT_SLUG"}}}'
+  tags:
+    - deploy
+    - kubernetes-prod
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'

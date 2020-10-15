@@ -1,0 +1,166 @@
+stages:
+  - version
+  - test
+  - validate
+  - staging
+  - deploy
+
+variables:
+  GIT_DEPTH: 0
+  GIT_STRATEGY: clone
+  CONTAINER_TEST_IMAGE: define test image from your registry here (without Tag)
+
+version:
+  stage: version
+  # normally self builded image in your own registry with gitversion installed
+  image: gittools/gitversion:latest
+  script:
+    - "gitversion /output buildserver /config /.version.yml"
+  tags:
+    - build
+  artifacts:
+    paths:
+      - "gitversion.properties"
+
+vulnerability-scanning:
+  stage: test
+  allow_failure: true
+  # normally self builded image in your own registry
+  image: aquasec/trivy:latest
+  before_script:
+    # Get the latest version Tag from the GitLAb Container Registry
+    - |
+      export UPSTREAM_SemVer=$(curl -s --header "${G_GITLAB_API_TOKEN}" "${P_IMAGE_REGISTRY}" | jq -r '.[] | select(.name != "latest") | .name' | sort -V | tail -1  )
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker pull $P_CONTAINER_TEST_IMAGE:$UPSTREAM_SemVer
+    # Build report
+    - /trivy --exit-code 0 --cache-dir .trivycache/ --no-progress --format template --template "@/contrib/gitlab.tpl" -o gl-container-scanning-report.json ${P_CONTAINER_TEST_IMAGE}:${UPSTREAM_SemVer}
+    # Print report
+    - /trivy --exit-code 0 --cache-dir .trivycache/ --no-progress --severity HIGH ${P_CONTAINER_TEST_IMAGE}:${UPSTREAM_SemVer}
+    # Fail on high and critical vulnerabilities
+    - /trivy --exit-code 1 --cache-dir .trivycache/ --severity CRITICAL --no-progress ${P_CONTAINER_TEST_IMAGE}:${UPSTREAM_SemVer}
+  cache:
+    paths:
+      - .trivycache/
+#   # Enables https://docs.gitlab.com/ee/user/application_security/container_scanning/ (Container Scanning report is available on GitLab EE Ultimate or GitLab.com Gold)
+#   #artifacts:
+#     #reports:
+#       #container_scanning: gl-container-scanning-report.json
+  tags:
+    - test
+  rules:
+    - if: '$CI_COMMIT_BRANCH != "master" && $CI_MERGE_REQUEST_ID == null'
+
+validate-helm-chart:
+  stage: validate
+  # normally self builded image in your own registry with helm-lint, helm kubeval installed
+  image: dtzar/helm-kubectl:latest:latest
+  script:
+    # examine chart for possible issues
+    - helm lint chart/ -f chart/values.yaml -f chart/dev/values.yaml
+    - helm lint chart/ -f chart/values.yaml -f chart/prod/values.yaml
+    # validating chart against the Kubernetes schema 
+    - helm kubeval chart/ --strict -v ${G_KUBE_MAJOR_VERSION}
+  tags:
+    - test
+  rules:
+    - if: '$CI_COMMIT_BRANCH != "master" && $CI_MERGE_REQUEST_ID == null'
+
+staging-to-dev-k8s:
+  stage: staging
+  # normally self builded image in your own registry with helm, helm kubectl, curl and jq installed
+  image: dtzar/helm-kubectl:latest:latest
+  environment:
+    name: dev
+    kubernetes:
+      namespace: ${P_KUBE_NAMESPACE}
+  before_script:
+    # Get the latest version Tag from the GitLAb Container Registry
+    - |
+      export UPSTREAM_SemVer=$(curl -s --header "${G_GITLAB_API_TOKEN}" "${P_IMAGE_REGISTRY}" | jq -r '.[] | select(.name != "latest") | .name' | sort -V | tail -1  )
+  script:
+    # Importing GitVersion Values
+    - "source gitversion.properties"
+    - "export $(cut -d= -f1 gitversion.properties)"   
+    # Define K8s default environment
+    - kubectl config set-cluster ${G_KUBE_DEV_CLUSTER} --server="${KUBE_URL}"
+    - kubectl config set clusters.${G_KUBE_DEV_CLUSTER}.certificate-authority-data ${G_KUBE_DEV_CLUSTER_CA}
+    - kubectl config set-credentials ${G_GITLAB_ADMIN} --token="${G_GITLAB_ADMIN_DEV_TOKEN}"
+    - kubectl config set-context default --cluster="${G_KUBE_DEV_CLUSTER}" --user="${G_GITLAB_ADMIN}"
+    - kubectl config use-context default
+    # Checking if Namespace exists
+    - export NAMESPACE=$(kubectl get namespaces ${P_KUBE_NAMESPACE} -o jsonpath="{.metadata.name}")  
+    - |
+      if [ "$NAMESPACE" == "${P_KUBE_NAMESPACE}" ]; then 
+        echo -e "\033[35;1mNamespace already created.Nothing to do.\033[0m"; 
+      else kubectl create namespace ${P_KUBE_NAMESPACE} ; 
+      fi
+    # Define K8s Environment for project Namespace
+    - kubectl config set-context default --cluster="${G_KUBE_DEV_CLUSTER}" --user="${G_GITLAB_ADMIN}" --namespace="${P_KUBE_NAMESPACE}"
+    - kubectl config use-context default
+    # Ckeck if Registry image Pull secret is created
+    - export SECRET=$(kubectl --namespace ${P_KUBE_NAMESPACE} get secret ${G_SECRET_NAME} -o jsonpath="{.metadata.name}")
+    - |
+      if [ "${SECRET}" == "${G_SECRET_NAME}" ]; then 
+        echo -e "\033[35;1mSecret already created.Nothing to do.\033[0m"; 
+      else kubectl create secret docker-registry ${G_SECRET_NAME} --docker-server=${CI_REGISTRY} --docker-username=${G_REGISTRY_USER} --docker-password=${G_REGISTRY_TOKEN} --docker-email=${G_REGISTRY_EMAIL}; 
+      fi
+    # package Helm Chart
+    - helm package chart/ --version=${GitVersion_SemVer} --app-version=${UPSTREAM_SemVer} --namespace ${P_KUBE_NAMESPACE} 
+    # deploying Helm Chart
+    - helm upgrade -i -f chart/dev/values.yaml --wait --set image.tag=${UPSTREAM_SemVer} --timeout=600s --description="Updated by Commit ${CI_COMMIT_SHORT_SHA}" ${CI_PROJECT_NAME} ./${CI_PROJECT_NAME}-${GitVersion_SemVer}.tgz --namespace ${P_KUBE_NAMESPACE} 
+  tags:
+    - staging
+    - kubernetes-dev
+  rules:
+    - if: '$CI_COMMIT_BRANCH != "master" && $CI_MERGE_REQUEST_ID == null'
+
+deploy-to-prod-k8s:
+  stage: deploy
+  # normally self builded image in your own registry with helm, helm kubectl, curl and jq installed
+  image: dtzar/helm-kubectl:latest:latest
+  environment:
+    name: production
+    kubernetes:
+      namespace: ${P_KUBE_NAMESPACE}
+  before_script:
+    # Get the latest version Tag from the GitLAb Container Registry
+    - |
+      export UPSTREAM_SemVer=$(curl -s --header "${G_GITLAB_API_TOKEN}" "${P_IMAGE_REGISTRY}" | jq -r '.[] | select(.name != "latest") | .name' | sort -V | tail -1  )
+  script:
+    # Importing GitVersion Values
+    - "source gitversion.properties"
+    - "export $(cut -d= -f1 gitversion.properties)"   
+    # Define K8s default environment
+    - kubectl config set-cluster ${G_KUBE_PROD_CLUSTER} --server="${KUBE_URL}"
+    - kubectl config set clusters.${G_KUBE_PROD_CLUSTER}.certificate-authority-data ${G_KUBE_PROD_CLUSTER_CA}
+    - kubectl config set-credentials ${G_GITLAB_ADMIN} --token="${G_GITLAB_ADMIN_PROD_TOKEN}"
+    - kubectl config set-context default --cluster="${G_KUBE_PROD_CLUSTER}" --user="${G_GITLAB_ADMIN}"
+    - kubectl config use-context default
+    # Checking if Namespace exists
+    - export NAMESPACE=$(kubectl get namespaces ${P_KUBE_NAMESPACE} -o jsonpath="{.metadata.name}")  
+    - |
+      if [ "$NAMESPACE" == "${P_KUBE_NAMESPACE}" ]; then 
+        echo -e "\033[35;1mNamespace already created.Nothing to do.\033[0m"; 
+      else kubectl create namespace ${P_KUBE_NAMESPACE} ; 
+      fi
+    # Define K8s Environment for project Namespace
+    - kubectl config set-context default --cluster="${G_KUBE_CLUSTER}" --user="${G_GITLAB_ADMIN}" --namespace="${P_KUBE_NAMESPACE}"
+    - kubectl config use-context default
+    # Ckeck if Registry image Pull secret is created
+    - export SECRET=$(kubectl --namespace ${P_KUBE_NAMESPACE} get secret ${G_DEVELOPMENT_SECRET_NAME} -o jsonpath="{.metadata.name}")
+    - |
+      if [ "${SECRET}" == "${G_DEVELOPMENT_SECRET_NAME}" ]; then 
+        echo -e "\033[35;1mSecret already created.Nothing to do.\033[0m"; 
+      else kubectl create secret docker-registry ${G_DEVELOPMENT_SECRET_NAME} --docker-server=${CI_REGISTRY} --docker-username=${G_DEVELOPMENT_REGISTRY_USER} --docker-password=${G_DEVELOPMENT_REGISTRY_TOKEN} --docker-email=${G_DEVELOPMENT_REGISTRY_EMAIL}; 
+      fi
+    # packaging Helm Chart
+    - helm package chart/ --version=${GitVersion_SemVer} --app-version=${UPSTREAM_SemVer} --namespace ${P_KUBE_NAMESPACE} 
+    # deploying Helm Chart
+    - helm upgrade -i -f chart/prod/values.yaml --wait --set image.tag=${UPSTREAM_SemVer} --timeout=600s --description="Updated by Commit ${CI_COMMIT_SHORT_SHA}" ${CI_PROJECT_NAME} ./${CI_PROJECT_NAME}-${GitVersion_SemVer}.tgz --namespace ${P_KUBE_NAMESPACE} 
+  tags:
+    - deploy
+    - kubernetes-prod
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'

@@ -55,12 +55,12 @@ vulnerability-scanning:
 validate-helm-chart:
   stage: validate
   # normally self builded image in your own registry with helm-lint, helm kubeval installed
-  image: dtzar/helm-kubectl:latest
+  image: dtzar/helm-kubectl:latest:latest
   script:
     # examine chart for possible issues
     - helm lint chart/ -f chart/values.yaml -f chart/dev/values.yaml
     - helm lint chart/ -f chart/values.yaml -f chart/prod/values.yaml
-    # validating chart against the Kubernetes schema
+    # validating chart against the Kubernetes schema 
     - helm kubeval chart/ --strict -v ${G_KUBE_MAJOR_VERSION}
   tags:
     - test
@@ -82,7 +82,7 @@ staging-to-dev-k8s:
   script:
     # Importing GitVersion Values
     - "source gitversion.properties"
-    - "export $(cut -d= -f1 gitversion.properties)"
+    - "export $(cut -d= -f1 gitversion.properties)"   
     # Define K8s default environment
     - kubectl config set-cluster ${G_KUBE_DEV_CLUSTER} --server="${KUBE_URL}"
     - kubectl config set clusters.${G_KUBE_DEV_CLUSTER}.certificate-authority-data ${G_KUBE_DEV_CLUSTER_CA}
@@ -90,11 +90,11 @@ staging-to-dev-k8s:
     - kubectl config set-context default --cluster="${G_KUBE_DEV_CLUSTER}" --user="${G_GITLAB_ADMIN}"
     - kubectl config use-context default
     # Checking if Namespace exists
-    - export NAMESPACE=$(kubectl get namespaces ${P_KUBE_NAMESPACE} -o jsonpath="{.metadata.name}")
+    - export NAMESPACE=$(kubectl get namespaces ${P_KUBE_NAMESPACE} -o jsonpath="{.metadata.name}")  
     - |
-      if [ "$NAMESPACE" == "${P_KUBE_NAMESPACE}" ]; then
-        echo -e "\033[35;1mNamespace already created.Nothing to do.\033[0m";
-      else kubectl create namespace ${P_KUBE_NAMESPACE} ;
+      if [ "$NAMESPACE" == "${P_KUBE_NAMESPACE}" ]; then 
+        echo -e "\033[35;1mNamespace already created.Nothing to do.\033[0m"; 
+      else kubectl create namespace ${P_KUBE_NAMESPACE} ; 
       fi
     # Define K8s Environment for project Namespace
     - kubectl config set-context default --cluster="${G_KUBE_DEV_CLUSTER}" --user="${G_GITLAB_ADMIN}" --namespace="${P_KUBE_NAMESPACE}"
@@ -102,14 +102,14 @@ staging-to-dev-k8s:
     # Ckeck if Registry image Pull secret is created
     - export SECRET=$(kubectl --namespace ${P_KUBE_NAMESPACE} get secret ${G_SECRET_NAME} -o jsonpath="{.metadata.name}")
     - |
-      if [ "${SECRET}" == "${G_SECRET_NAME}" ]; then
-        echo -e "\033[35;1mSecret already created.Nothing to do.\033[0m";
-      else kubectl create secret docker-registry ${G_SECRET_NAME} --docker-server=${CI_REGISTRY} --docker-username=${G_REGISTRY_USER} --docker-password=${G_REGISTRY_TOKEN} --docker-email=${G_REGISTRY_EMAIL};
+      if [ "${SECRET}" == "${G_SECRET_NAME}" ]; then 
+        echo -e "\033[35;1mSecret already created.Nothing to do.\033[0m"; 
+      else kubectl create secret docker-registry ${G_SECRET_NAME} --docker-server=${CI_REGISTRY} --docker-username=${G_REGISTRY_USER} --docker-password=${G_REGISTRY_TOKEN} --docker-email=${G_REGISTRY_EMAIL}; 
       fi
     # package Helm Chart
-    - helm package chart/ --version=${GitVersion_SemVer} --app-version=${UPSTREAM_SemVer} --namespace ${P_KUBE_NAMESPACE}
+    - helm package chart/ --version=${GitVersion_SemVer} --app-version=${UPSTREAM_SemVer} --namespace ${P_KUBE_NAMESPACE} 
     # deploying Helm Chart
-    - helm upgrade -i -f chart/dev/values.yaml --wait --set image.tag=${UPSTREAM_SemVer} --timeout=600s --description="Updated by Commit ${CI_COMMIT_SHORT_SHA}" ${CI_PROJECT_NAME} ./${CI_PROJECT_NAME}-${GitVersion_SemVer}.tgz --namespace ${P_KUBE_NAMESPACE}
+    - helm upgrade -i -f chart/dev/values.yaml --wait --set image.tag=${UPSTREAM_SemVer} --timeout=600s --description="Updated by Commit ${CI_COMMIT_SHORT_SHA}" ${CI_PROJECT_NAME} ./${CI_PROJECT_NAME}-${GitVersion_SemVer}.tgz --namespace ${P_KUBE_NAMESPACE} 
   tags:
     - staging
     - kubernetes-dev
@@ -131,7 +131,7 @@ deploy-to-prod-k8s:
   script:
     # Importing GitVersion Values
     - "source gitversion.properties"
-    - "export $(cut -d= -f1 gitversion.properties)"
+    - "export $(cut -d= -f1 gitversion.properties)"   
     # Define K8s default environment
     - kubectl config set-cluster ${G_KUBE_PROD_CLUSTER} --server="${KUBE_URL}"
     - kubectl config set clusters.${G_KUBE_PROD_CLUSTER}.certificate-authority-data ${G_KUBE_PROD_CLUSTER_CA}
@@ -139,11 +139,11 @@ deploy-to-prod-k8s:
     - kubectl config set-context default --cluster="${G_KUBE_PROD_CLUSTER}" --user="${G_GITLAB_ADMIN}"
     - kubectl config use-context default
     # Checking if Namespace exists
-    - export NAMESPACE=$(kubectl get namespaces ${P_KUBE_NAMESPACE} -o jsonpath="{.metadata.name}")
+    - export NAMESPACE=$(kubectl get namespaces ${P_KUBE_NAMESPACE} -o jsonpath="{.metadata.name}")  
     - |
-      if [ "$NAMESPACE" == "${P_KUBE_NAMESPACE}" ]; then
-        echo -e "\033[35;1mNamespace already created.Nothing to do.\033[0m";
-      else kubectl create namespace ${P_KUBE_NAMESPACE} ;
+      if [ "$NAMESPACE" == "${P_KUBE_NAMESPACE}" ]; then 
+        echo -e "\033[35;1mNamespace already created.Nothing to do.\033[0m"; 
+      else kubectl create namespace ${P_KUBE_NAMESPACE} ; 
       fi
     # Define K8s Environment for project Namespace
     - kubectl config set-context default --cluster="${G_KUBE_CLUSTER}" --user="${G_GITLAB_ADMIN}" --namespace="${P_KUBE_NAMESPACE}"
@@ -151,14 +151,14 @@ deploy-to-prod-k8s:
     # Ckeck if Registry image Pull secret is created
     - export SECRET=$(kubectl --namespace ${P_KUBE_NAMESPACE} get secret ${G_DEVELOPMENT_SECRET_NAME} -o jsonpath="{.metadata.name}")
     - |
-      if [ "${SECRET}" == "${G_DEVELOPMENT_SECRET_NAME}" ]; then
-        echo -e "\033[35;1mSecret already created.Nothing to do.\033[0m";
-      else kubectl create secret docker-registry ${G_DEVELOPMENT_SECRET_NAME} --docker-server=${CI_REGISTRY} --docker-username=${G_DEVELOPMENT_REGISTRY_USER} --docker-password=${G_DEVELOPMENT_REGISTRY_TOKEN} --docker-email=${G_DEVELOPMENT_REGISTRY_EMAIL};
+      if [ "${SECRET}" == "${G_DEVELOPMENT_SECRET_NAME}" ]; then 
+        echo -e "\033[35;1mSecret already created.Nothing to do.\033[0m"; 
+      else kubectl create secret docker-registry ${G_DEVELOPMENT_SECRET_NAME} --docker-server=${CI_REGISTRY} --docker-username=${G_DEVELOPMENT_REGISTRY_USER} --docker-password=${G_DEVELOPMENT_REGISTRY_TOKEN} --docker-email=${G_DEVELOPMENT_REGISTRY_EMAIL}; 
       fi
     # packaging Helm Chart
-    - helm package chart/ --version=${GitVersion_SemVer} --app-version=${UPSTREAM_SemVer} --namespace ${P_KUBE_NAMESPACE}
+    - helm package chart/ --version=${GitVersion_SemVer} --app-version=${UPSTREAM_SemVer} --namespace ${P_KUBE_NAMESPACE} 
     # deploying Helm Chart
-    - helm upgrade -i -f chart/prod/values.yaml --wait --set image.tag=${UPSTREAM_SemVer} --timeout=600s --description="Updated by Commit ${CI_COMMIT_SHORT_SHA}" ${CI_PROJECT_NAME} ./${CI_PROJECT_NAME}-${GitVersion_SemVer}.tgz --namespace ${P_KUBE_NAMESPACE}
+    - helm upgrade -i -f chart/prod/values.yaml --wait --set image.tag=${UPSTREAM_SemVer} --timeout=600s --description="Updated by Commit ${CI_COMMIT_SHORT_SHA}" ${CI_PROJECT_NAME} ./${CI_PROJECT_NAME}-${GitVersion_SemVer}.tgz --namespace ${P_KUBE_NAMESPACE} 
   tags:
     - deploy
     - kubernetes-prod

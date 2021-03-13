@@ -1,6 +1,6 @@
 # GitLabCI Kubernetes examples
 
-Examples for deploying Helm Chart and Kubernetes manifests to on-prem Kuberentes via GitLAbCI.
+Examples for deploying Helm Charts and Kubernetes manifests via GitLabCI.
  
 - [Example for deyploying Helm Charts with GitLabCI](https://github.com/philwelz/gitlabci-k8s-examples/blob/master/helm.pipeline.yaml)
 - [Example for deyploying Kubernetes manifests with GitLabCI](https://github.com/philwelz/gitlabci-k8s-examples/blob/master/k8s.pipeline.yaml)

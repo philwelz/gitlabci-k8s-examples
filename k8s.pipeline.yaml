@@ -8,7 +8,7 @@ validate-k8s-yaml:
   # normally self builded image in your own registry with kubeval installed
   image: garethr/kubeval:latest
   script:
-    # validating against the Kubernetes schema 
+    # validating against the Kubernetes schema
     - kubeval k8s/*.yaml --strict --kubernetes-version ${G_KUBE_MAJOR_VERSION}
   tags:
     - test
